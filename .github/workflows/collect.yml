@@ -1,0 +1,51 @@
+# ボートレース公式サイトの直前情報・オッズを締切前に取得し、非公開リポジトリに保存する。
+# このリポジトリにはプログラムだけを置き、取得したデータは置かない。
+# 時刻はUTC。JST 8:20 / 13:40 / 19:00 に開始し、区間を少し重ねて全レースをカバーする。
+name: collect-odds
+on:
+  schedule:
+    - cron: "20 23 * * *"   # JST 08:20〜13:50
+    - cron: "40 4 * * *"    # JST 13:40〜19:10
+    - cron: "0 10 * * *"    # JST 19:00〜21:40
+  push:
+    paths: [".trigger"]     # このファイルを更新すると約10分の試運転が走る
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "動かす時間（時間単位）"
+        default: "5.5"
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install beautifulsoup4 lxml
+      - name: 取得
+        run: |
+          H="${{ github.event.inputs.hours }}"
+          if [ -z "$H" ]; then
+            if [ "${{ github.event_name }}" = "push" ]; then H=0.15
+            elif [ "${{ github.event.schedule }}" = "0 10 * * *" ]; then H=2.7
+            else H=5.5; fi
+          fi
+          python collector.py --hours "$H" --before 5 1 --out out/odds
+      - name: 保存（非公開リポジトリへ）
+        if: always()
+        env:
+          DATA_TOKEN: ${{ secrets.DATA_TOKEN }}
+        run: |
+          if [ -z "$DATA_TOKEN" ]; then echo "DATA_TOKEN が登録されていません"; exit 1; fi
+          git clone --depth 1 "https://x-access-token:${DATA_TOKEN}@github.com/daisukenakagawa-blip/kyouteiAI.git" store
+          mkdir -p store/data/odds
+          cp -r out/odds/. store/data/odds/ 2>/dev/null || true
+          cd store
+          git config user.name "odds-collector"
+          git config user.email "odds-collector@users.noreply.github.com"
+          git add data/odds
+          git commit -m "odds $(date -u +%F_%H%M)" || echo "no changes"
+          git pull --rebase || true
+          git push
