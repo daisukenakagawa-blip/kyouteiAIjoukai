@@ -8,12 +8,16 @@ on:
     - cron: "40 4 * * *"    # JST 13:40〜19:10
     - cron: "0 10 * * *"    # JST 19:00〜21:40
   push:
-    paths: [".trigger"]     # このファイルを更新すると約10分の試運転が走る
+    paths: [".trigger"]     # このファイルを更新すると手動で走る（1行目が数字ならその時間、なければ約10分）
   workflow_dispatch:
     inputs:
       hours:
         description: "動かす時間（時間単位）"
         default: "5.5"
+# 同時に2本走らせない（公式サイトへのアクセスを1秒1回までに保つため）。後から来た分は順番待ちになる。
+concurrency:
+  group: collect-odds
+  cancel-in-progress: false
 jobs:
   collect:
     runs-on: ubuntu-latest
@@ -28,7 +32,9 @@ jobs:
         run: |
           H="${{ github.event.inputs.hours }}"
           if [ -z "$H" ]; then
-            if [ "${{ github.event_name }}" = "push" ]; then H=0.15
+            if [ "${{ github.event_name }}" = "push" ]; then
+              H=$(head -n1 .trigger | grep -E '^[0-9]+(\.[0-9]+)?$' || true)
+              if [ -z "$H" ]; then H=0.15; fi
             elif [ "${{ github.event.schedule }}" = "0 10 * * *" ]; then H=2.7
             else H=5.5; fi
           fi
