@@ -54,7 +54,7 @@ jobs:
           save() {
             mkdir -p store/data/odds
             # オッズは追加のみ。取得ログと予定表は実行ごとに別名で保存する（後の実行が前の記録を上書きしないため）。
-            rsync -a --exclude 'fetch_log.jsonl' --exclude 'schedule.json' out/odds/ store/data/odds/ 2>/dev/null || true
+            if [ -d out/odds ]; then (cd out/odds && tar cf - --exclude=fetch_log.jsonl --exclude=schedule.json .) | (cd store/data/odds && tar xf -); fi
             for d in out/odds/*/; do
               [ -d "$d" ] || continue
               day=$(basename "$d"); mkdir -p "store/data/odds/$day"
