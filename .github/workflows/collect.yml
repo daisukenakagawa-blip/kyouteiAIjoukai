@@ -51,6 +51,16 @@ jobs:
           git clone --depth 1 "https://x-access-token:${DATA_TOKEN}@github.com/daisukenakagawa-blip/kyouteiAI.git" store
           git -C store config user.name "odds-collector"
           git -C store config user.email "odds-collector@users.noreply.github.com"
+          if [ -f store/engine/scripts/cloud_run.py ]; then
+            # 予測エンジンあり: 取得と同時に予測・判定・台帳記録まで行う（保存は判定のたび＋15分ごとにプログラム側で行う）
+            pip install -q lightgbm pandas numpy scikit-learn lhafile
+            python store/engine/scripts/cloud_run.py --hours "$H" --before 5 1 || echo "cloud_run が異常終了"
+            git -C store add data/odds ledger hist/inc
+            git -C store commit -q -m "odds $(date -u +%F_%H%M)" || true
+            git -C store pull -q --rebase || true
+            git -C store push -q || true
+            exit 0
+          fi
           save() {
             mkdir -p store/data/odds
             # オッズは追加のみ。取得ログと予定表は実行ごとに別名で保存する（後の実行が前の記録を上書きしないため）。
