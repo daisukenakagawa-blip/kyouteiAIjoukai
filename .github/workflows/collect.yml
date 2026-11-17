@@ -6,8 +6,8 @@ on:
   schedule:
     # GitHubの予約実行は数時間遅れたり飛ばされたりするので、開催時間帯（JST 8:10〜21:40）に30分おきに起動をかける。
     # 同時に動くのは1本だけ（下の concurrency）。動いている間に来た起動は順番待ちになり、前の分が終わるとすぐ引き継ぐ。
-    - cron: "10,40 23 * * *"
-    - cron: "10,40 0-12 * * *"
+    # 実測で予約は6〜10時間遅れることがあるため、夜間も含めて終日30分おきに合図を出す。開催時間外に届いた分は何もせず終了する。
+    - cron: "10,40 * * * *"
   push:
     paths: [".trigger"]     # このファイルを更新すると手動で走る（1行目が数字ならその時間、なければ約10分）
   workflow_dispatch:
@@ -53,7 +53,14 @@ jobs:
           git -C store config user.email "odds-collector@users.noreply.github.com"
           save() {
             mkdir -p store/data/odds
-            cp -r out/odds/. store/data/odds/ 2>/dev/null || true
+            # オッズは追加のみ。取得ログと予定表は実行ごとに別名で保存する（後の実行が前の記録を上書きしないため）。
+            rsync -a --exclude 'fetch_log.jsonl' --exclude 'schedule.json' out/odds/ store/data/odds/ 2>/dev/null || true
+            for d in out/odds/*/; do
+              [ -d "$d" ] || continue
+              day=$(basename "$d"); mkdir -p "store/data/odds/$day"
+              [ -f "$d/fetch_log.jsonl" ] && cp "$d/fetch_log.jsonl" "store/data/odds/$day/fetch_log_${GITHUB_RUN_ID}.jsonl"
+              [ -f "$d/schedule.json" ] && cp "$d/schedule.json" "store/data/odds/$day/schedule_${GITHUB_RUN_ID}.json"
+            done
             git -C store add data/odds
             git -C store commit -q -m "odds $(date -u +%F_%H%M)" || return 0
             git -C store pull -q --rebase || true
