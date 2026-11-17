@@ -1,12 +1,13 @@
 # ボートレース公式サイトの直前情報・オッズを締切前に取得し、非公開リポジトリに保存する。
 # このリポジトリにはプログラムだけを置き、取得したデータは置かない。
-# 時刻はUTC。JST 8:20 / 13:40 / 19:00 に開始し、区間を少し重ねて全レースをカバーする。
+# 時刻はUTC。開催時間帯に30分おきに起動をかけ、1本だけが動き続ける（JST 21:45 まで、最長5.6時間で次に引き継ぐ）。
 name: collect-odds
 on:
   schedule:
-    - cron: "20 23 * * *"   # JST 08:20〜13:50
-    - cron: "40 4 * * *"    # JST 13:40〜19:10
-    - cron: "0 10 * * *"    # JST 19:00〜21:40
+    # GitHubの予約実行は数時間遅れたり飛ばされたりするので、開催時間帯（JST 8:10〜21:40）に30分おきに起動をかける。
+    # 同時に動くのは1本だけ（下の concurrency）。動いている間に来た起動は順番待ちになり、前の分が終わるとすぐ引き継ぐ。
+    - cron: "10,40 23 * * *"
+    - cron: "10,40 0-12 * * *"
   push:
     paths: [".trigger"]     # このファイルを更新すると手動で走る（1行目が数字ならその時間、なければ約10分）
   workflow_dispatch:
@@ -28,30 +29,42 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install beautifulsoup4 lxml
-      - name: 取得
-        run: |
-          H="${{ github.event.inputs.hours }}"
-          if [ -z "$H" ]; then
-            if [ "${{ github.event_name }}" = "push" ]; then
-              H=$(head -n1 .trigger | grep -E '^[0-9]+(\.[0-9]+)?$' || true)
-              if [ -z "$H" ]; then H=0.15; fi
-            elif [ "${{ github.event.schedule }}" = "0 10 * * *" ]; then H=2.7
-            else H=5.5; fi
-          fi
-          python collector.py --hours "$H" --before 5 1 --out out/odds
-      - name: 保存（非公開リポジトリへ）
-        if: always()
+      - name: 取得と保存（15分ごとに非公開リポジトリへ保存）
         env:
           DATA_TOKEN: ${{ secrets.DATA_TOKEN }}
         run: |
           if [ -z "$DATA_TOKEN" ]; then echo "DATA_TOKEN が登録されていません"; exit 1; fi
+          # 動かす時間: 手動指定があればそれ。なければ JST 21:45 まで（最長5.6時間）。開催時間外なら何もしない。
+          H="${{ github.event.inputs.hours }}"
+          if [ -z "$H" ] && [ "${{ github.event_name }}" = "push" ]; then
+            H=$(head -n1 .trigger | grep -E '^[0-9]+(\.[0-9]+)?$' || true)
+            if [ -z "$H" ]; then H=0.15; fi
+          fi
+          if [ -z "$H" ]; then
+            NOW=$(( 10#$(TZ=Asia/Tokyo date +%H) * 60 + 10#$(TZ=Asia/Tokyo date +%M) ))
+            LEFT=$(( 21 * 60 + 45 - NOW ))
+            if [ "$NOW" -lt 450 ] || [ "$LEFT" -lt 5 ]; then echo "開催時間外のため何もしません"; exit 0; fi
+            if [ "$LEFT" -gt 336 ]; then LEFT=336; fi
+            H=$(awk "BEGIN{printf \"%.2f\", $LEFT/60}")
+          fi
+          echo "動かす時間: ${H}h"
           git clone --depth 1 "https://x-access-token:${DATA_TOKEN}@github.com/daisukenakagawa-blip/kyouteiAI.git" store
-          mkdir -p store/data/odds
-          cp -r out/odds/. store/data/odds/ 2>/dev/null || true
-          cd store
-          git config user.name "odds-collector"
-          git config user.email "odds-collector@users.noreply.github.com"
-          git add data/odds
-          git commit -m "odds $(date -u +%F_%H%M)" || echo "no changes"
-          git pull --rebase || true
-          git push
+          git -C store config user.name "odds-collector"
+          git -C store config user.email "odds-collector@users.noreply.github.com"
+          save() {
+            mkdir -p store/data/odds
+            cp -r out/odds/. store/data/odds/ 2>/dev/null || true
+            git -C store add data/odds
+            git -C store commit -q -m "odds $(date -u +%F_%H%M)" || return 0
+            git -C store pull -q --rebase || true
+            git -C store push -q
+          }
+          python collector.py --hours "$H" --before 5 1 --out out/odds &
+          PID=$!
+          N=0
+          while kill -0 "$PID" 2>/dev/null; do
+            sleep 30; N=$((N + 1))
+            if [ $((N % 30)) -eq 0 ]; then save || echo "保存に失敗（次回に再試行）"; fi
+          done
+          wait "$PID" || echo "collector が異常終了"
+          save
