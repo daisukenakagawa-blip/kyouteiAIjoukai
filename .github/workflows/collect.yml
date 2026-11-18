@@ -19,6 +19,9 @@ on:
 concurrency:
   group: collect-odds
   cancel-in-progress: false
+permissions:
+  contents: read
+  actions: write      # 終了時に次の実行を自分で予約するため
 jobs:
   collect:
     runs-on: ubuntu-latest
@@ -38,7 +41,7 @@ jobs:
           H="${{ github.event.inputs.hours }}"
           if [ -z "$H" ] && [ "${{ github.event_name }}" = "push" ]; then
             H=$(head -n1 .trigger | grep -E '^[0-9]+(\.[0-9]+)?$' || true)
-            if [ -z "$H" ]; then H=0.15; fi
+            if [ -z "$H" ] && [ "$(head -n1 .trigger)" != "auto" ]; then H=0.15; fi
           fi
           if [ -z "$H" ]; then
             NOW=$(( 10#$(TZ=Asia/Tokyo date +%H) * 60 + 10#$(TZ=Asia/Tokyo date +%M) ))
@@ -55,7 +58,7 @@ jobs:
             # 予測エンジンあり: 取得と同時に予測・判定・台帳記録まで行う（保存は判定のたび＋15分ごとにプログラム側で行う）
             pip install -q lightgbm pandas numpy scikit-learn lhafile
             python store/engine/scripts/cloud_run.py --hours "$H" --before 5 1 || echo "cloud_run が異常終了"
-            git -C store add data/odds ledger hist/inc
+            for p in data/odds ledger hist/inc; do [ -e "store/$p" ] && git -C store add "$p"; done
             git -C store commit -q -m "odds $(date -u +%F_%H%M)" || true
             git -C store pull -q --rebase || true
             git -C store push -q || true
@@ -85,3 +88,16 @@ jobs:
           done
           wait "$PID" || echo "collector が異常終了"
           save
+
+      - name: 次の実行を予約（開催時間中は途切れないように自分で引き継ぐ）
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOW=$(( 10#$(TZ=Asia/Tokyo date +%H) * 60 + 10#$(TZ=Asia/Tokyo date +%M) ))
+          if [ "$NOW" -ge 450 ] && [ "$NOW" -lt 1295 ]; then
+            gh workflow run collect.yml --repo "${{ github.repository }}" --ref main && echo "次の実行を予約しました"
+          else
+            echo "開催時間外のため予約しません"
+          fi
+
