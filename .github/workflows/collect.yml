@@ -36,6 +36,7 @@ jobs:
         env:
           DATA_TOKEN: ${{ secrets.DATA_TOKEN }}
         run: |
+          date +%s > /tmp/collect_start
           if [ -z "$DATA_TOKEN" ]; then echo "DATA_TOKEN が登録されていません"; exit 1; fi
           # 動かす時間: 手動指定があればそれ。なければ JST 21:45 まで（最長5.6時間）。開催時間外なら何もしない。
           H="${{ github.event.inputs.hours }}"
@@ -95,7 +96,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           NOW=$(( 10#$(TZ=Asia/Tokyo date +%H) * 60 + 10#$(TZ=Asia/Tokyo date +%M) ))
-          if [ "$NOW" -ge 450 ] && [ "$NOW" -lt 1295 ]; then
+          RAN=$(( $(date +%s) - $(cat /tmp/collect_start 2>/dev/null || date +%s) ))
+          # すぐ終わった実行（失敗など）からは予約しない。空回りの連鎖を防ぐ。
+          if [ "$NOW" -ge 450 ] && [ "$NOW" -lt 1295 ] && [ "$RAN" -ge 600 ]; then
             gh workflow run collect.yml --repo "${{ github.repository }}" --ref main && echo "次の実行を予約しました"
           else
             echo "開催時間外のため予約しません"
