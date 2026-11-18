@@ -51,8 +51,18 @@ jobs:
               # 夜間: 翌朝7:30まで待機する（1回の待機は最長5時間。終わると次の実行に引き継ぐ）。公式サイトにはアクセスしない。
               if [ "$NOW" -lt 450 ]; then W=$(( 450 - NOW )); else W=$(( 450 + 1440 - NOW )); fi
               if [ "$W" -gt 300 ]; then W=300; fi
-              echo "開催時間外のため ${W} 分待機します"
-              sleep $(( W * 60 ))
+              echo "開催時間外のため ${W} 分待機します（その間に過去の確定オッズを少しずつ取得）"
+              T0=$(date +%s)
+              if [ "$W" -gt 20 ] && git clone --depth 1 "https://x-access-token:${DATA_TOKEN}@github.com/daisukenakagawa-blip/kyouteiAI.git" store; then
+                git -C store config user.name "odds-collector"
+                git -C store config user.email "odds-collector@users.noreply.github.com"
+                if [ -f store/engine/scripts/backfill_odds.py ]; then
+                  # 2秒に1回まで。朝の収集開始の10分前には止める。
+                  python store/engine/scripts/backfill_odds.py --minutes $(( W - 10 )) --since 2024-01-01 --interval 2 || echo "backfill が異常終了"
+                fi
+              fi
+              REST=$(( W * 60 - ( $(date +%s) - T0 ) ))
+              if [ "$REST" -gt 0 ]; then sleep "$REST"; fi
               echo 1 > /tmp/chain_ok
               exit 0
             fi
