@@ -6,7 +6,7 @@ on:
   schedule:
     # GitHubの予約実行は数時間遅れたり飛ばされたりするので、開催時間帯（JST 8:10〜21:40）に30分おきに起動をかける。
     # 同時に動くのは1本だけ（下の concurrency）。動いている間に来た起動は順番待ちになり、前の分が終わるとすぐ引き継ぐ。
-    # 実測で予約は6〜10時間遅れることがあるため、夜間も含めて終日30分おきに合図を出す。開催時間外に届いた分は何もせず終了する。
+    # 実測で予約は6〜10時間遅れることがあるため、夜間も含めて終日30分おきに合図を出す。開催時間外に届いた分は翌朝まで待機して引き継ぐ。
     - cron: "10,40 * * * *"
   push:
     paths: [".trigger"]     # このファイルを更新すると手動で走る（1行目が数字ならその時間、なければ約10分）
@@ -47,7 +47,15 @@ jobs:
           if [ -z "$H" ]; then
             NOW=$(( 10#$(TZ=Asia/Tokyo date +%H) * 60 + 10#$(TZ=Asia/Tokyo date +%M) ))
             LEFT=$(( 21 * 60 + 45 - NOW ))
-            if [ "$NOW" -lt 450 ] || [ "$LEFT" -lt 5 ]; then echo "開催時間外のため何もしません"; exit 0; fi
+            if [ "$NOW" -lt 450 ] || [ "$LEFT" -lt 5 ]; then
+              # 夜間: 翌朝7:30まで待機する（1回の待機は最長5時間。終わると次の実行に引き継ぐ）。公式サイトにはアクセスしない。
+              if [ "$NOW" -lt 450 ]; then W=$(( 450 - NOW )); else W=$(( 450 + 1440 - NOW )); fi
+              if [ "$W" -gt 300 ]; then W=300; fi
+              echo "開催時間外のため ${W} 分待機します"
+              sleep $(( W * 60 ))
+              echo 1 > /tmp/chain_ok
+              exit 0
+            fi
             if [ "$LEFT" -gt 336 ]; then LEFT=336; fi
             H=$(awk "BEGIN{printf \"%.2f\", $LEFT/60}")
           fi
@@ -90,7 +98,7 @@ jobs:
           wait "$PID" || echo "collector が異常終了"
           save
 
-      - name: 次の実行を予約（開催時間中は途切れないように自分で引き継ぐ）
+      - name: 次の実行を予約（昼は収集を、夜は待機を、途切れないように自分で引き継ぐ）
         if: ${{ !cancelled() }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -98,9 +106,10 @@ jobs:
           NOW=$(( 10#$(TZ=Asia/Tokyo date +%H) * 60 + 10#$(TZ=Asia/Tokyo date +%M) ))
           RAN=$(( $(date +%s) - $(cat /tmp/collect_start 2>/dev/null || date +%s) ))
           # すぐ終わった実行（失敗など）からは予約しない。空回りの連鎖を防ぐ。
-          if [ "$NOW" -ge 450 ] && [ "$NOW" -lt 1295 ] && [ "$RAN" -ge 600 ]; then
+          # 10分以上働いた実行か、夜間の待機を終えた実行だけが次を予約する（失敗の空回りを防ぐ）
+          if [ "$RAN" -ge 600 ] || [ -f /tmp/chain_ok ]; then
             gh workflow run collect.yml --repo "${{ github.repository }}" --ref main && echo "次の実行を予約しました"
           else
-            echo "開催時間外のため予約しません"
+            echo "すぐ終わった実行のため予約しません"
           fi
 
