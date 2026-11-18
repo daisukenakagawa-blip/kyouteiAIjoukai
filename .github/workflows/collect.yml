@@ -13,8 +13,9 @@ on:
   workflow_dispatch:
     inputs:
       hours:
-        description: "動かす時間（時間単位）"
-        default: "5.5"
+        description: "動かす時間（時間単位）。空欄なら自動（昼は21:45まで収集、夜は翌朝まで待機）"
+        default: ""
+        required: false
 # 同時に2本走らせない（公式サイトへのアクセスを1秒1回までに保つため）。後から来た分は順番待ちになる。
 concurrency:
   group: collect-odds
