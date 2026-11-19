@@ -32,7 +32,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install beautifulsoup4 lxml
+          cache: pip                          # 引き継ぎ時の準備を短くする（ライブラリの再ダウンロードを省く）
+          cache-dependency-path: requirements.txt
+      - run: pip install -q -r requirements.txt
       - name: 取得と保存（15分ごとに非公開リポジトリへ保存）
         env:
           DATA_TOKEN: ${{ secrets.DATA_TOKEN }}
@@ -76,7 +78,6 @@ jobs:
           git -C store config user.email "odds-collector@users.noreply.github.com"
           if [ -f store/engine/scripts/cloud_run.py ]; then
             # 予測エンジンあり: 取得と同時に予測・判定・台帳記録まで行う（保存は判定のたび＋15分ごとにプログラム側で行う）
-            pip install -q lightgbm pandas numpy scikit-learn lhafile
             python store/engine/scripts/cloud_run.py --hours "$H" --before 5 1 || echo "cloud_run が異常終了"
             for p in data/odds ledger hist/inc; do [ -e "store/$p" ] && git -C store add "$p"; done
             git -C store commit -q -m "odds $(date -u +%F_%H%M)" || true
